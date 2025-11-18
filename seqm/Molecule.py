@@ -37,6 +37,14 @@ class Molecule(torch.nn.Module):
         self.seqm_parameters = seqm_parameters
         self.method = seqm_parameters['method']
         
+        self.adj_matrix = None
+        self.bond_orders = None
+        self.formal_charges = None
+        self.formal_charges = None
+        self.lone_pairs = None
+        self.P_initial = None
+        self.mask_nddo = None
+        self.mask_lmo_matrix = None
         self.parser = Parser(self.seqm_parameters)
         self.packpar = Pack_Parameters(self.seqm_parameters).to(coordinates.device)
         

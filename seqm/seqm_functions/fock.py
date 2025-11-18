@@ -102,7 +102,7 @@ K_ind_4 = torch.tensor([
 
 def fock(nmol, molsize, P0, M, maskd, mask, idxi, idxj,
          w, W, gss, gpp, gsp, gp2, hsp,
-         themethod, zetas, zetap, zetad, Z, F0SD, G2SD):
+         themethod, zetas, zetap, zetad, Z, F0SD, G2SD, mask_nddo=None):
     """
     Construct the Fock matrix for either the default (4-basis) or PM6 (9-basis) method.
     """
@@ -124,7 +124,7 @@ def fock(nmol, molsize, P0, M, maskd, mask, idxi, idxj,
         F = _d_contrib_one_center(F, P, W, maskd)
 
     # 5) two-center (coulomb J & exchange K) neighbor-atom terms
-    F = _two_center(F, P, w, maskd, mask,idxi, idxj, themethod)
+    F = _two_center(F, P, w, maskd, mask,idxi, idxj, themethod, mask_nddo)
 
     # 6) reassemble full Fock matrix 
     nrs = nbf * molsize
@@ -205,10 +205,15 @@ def _d_contrib_one_center(F, P, W, maskd):
 
 # ——— Helper: two-center (J & K) —————————————————————————————————————
 
-def _two_center(F, P, w, maskd, mask, idxi, idxj, themethod):
+def _two_center(F, P, w, maskd, mask, idxi, idxj, themethod, mask_nddo=None):
     """
     Adds two-center (neighbor-atom) J and K contributions.
     """
+    # Apply NDDO cutoff if provided
+    if mask_nddo is not None:
+        # w shape is (nPairs, nP, nP)
+        # mask_nddo shape is (nPairs,)
+        w = w * mask_nddo.view(-1, 1, 1)
     # Two-electron two-center weight factors
 
     if themethod=='PM6':

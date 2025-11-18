@@ -41,6 +41,9 @@ class Electronic_Structure(torch.nn.Module):
         return force, density matrix, total energy of this batch
         """
         if dm_prop=='SCF':
+            if P0 is None and hasattr(molecule, 'P_initial') and molecule.P_initial is not None:
+                P0 = molecule.P_initial
+                
             molecule.force, P, molecule.Hf, molecule.Etot, molecule.Eelec, molecule.Enuc, molecule.Eiso, molecule.e_mo, molecule.e_gap, self.charge, self.notconverged = \
                         self.conservative_force(molecule, P0=P0, learned_parameters=learned_parameters, *args, **kwargs)
             molecule.dm = P.detach()

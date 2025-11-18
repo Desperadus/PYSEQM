@@ -1,6 +1,6 @@
 import torch
 
-def SP2(a, nocc, eps=1.0e-4, factor=2.0):
+def SP2(a, nocc, eps=1.0e-4, factor=2.0, mask=None):
     #print(a.shape)
     # a: batch of fock matrixes, don't need to be truncated
     # noccd: number of occupied MO
@@ -45,6 +45,8 @@ def SP2(a, nocc, eps=1.0e-4, factor=2.0):
     k=0
     while notconverged.any():
         a2[notconverged] = a0[notconverged].matmul(a0[notconverged]) #batch supported
+        if mask is not None:
+            a2[notconverged] = a2[notconverged] * mask[notconverged]
 
         tr_a2 = torch.sum(a2[notconverged].diagonal(dim1=1,dim2=2),dim=1)
         cond[notconverged] = torch.abs(tr_a2-noccd[notconverged]) < \

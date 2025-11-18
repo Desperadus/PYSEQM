@@ -23,6 +23,8 @@ from .seqm_functions.rcis_new import calc_cis_energy_any_batch, rcis_any_batch
 from .seqm_functions.rpa import rpa
 from .seqm_functions.scf_loop import scf_loop
 from .seqm_functions.dispersion_am1_fs1 import dispersion_am1_fs1
+from .seqm_functions.dispersion_am1_fs1 import dispersion_am1_fs1
+from .seqm_functions.mozyme_utils import build_lewis_structure, construct_initial_density
 
 """
 Semi-Emperical Quantum Mechanics: AM1/MNDO/PM3/PM6/PM6_SP
@@ -89,6 +91,8 @@ class Parser(torch.nn.Module):
         self.elements = seqm_parameters['elements']
         self.uhf = seqm_parameters.get('UHF', False)
         self.hipnn_automatic_doublet = seqm_parameters.get('HIPNN_automatic_doublet', False)
+        self.mozyme = seqm_parameters.get('mozyme', False)
+        self.mozyme_cutoffs = seqm_parameters.get('mozyme_cutoffs', [15.0, 10.0]) # [NDDO, LMO] in Angstrom
 
     def forward(self, molecule, themethod, return_mask_l=False, do_large_tensors=True, *args, **kwargs):
         """
@@ -201,6 +205,104 @@ class Parser(torch.nn.Module):
             mask = None
             mask_l = None
             pair_molid = None
+
+        if self.mozyme:
+            # We need to pass the molecule object, but it's partially constructed here.
+            # The build_lewis_structure expects 'molecule' to have 'rij', 'idxi', etc.
+            # We can temporarily attach them to the molecule object or pass them explicitly.
+            # Since 'molecule' is passed in, we can attach the calculated properties to it before calling.
+            
+            # Attach properties needed for mozyme_utils
+            molecule.rij = rij
+            molecule.idxi = idxi
+            molecule.idxj = idxj
+            molecule.pair_molid = pair_molid
+            molecule.Z = Z
+            
+            lewis_info = build_lewis_structure(molecule, self.elements)
+            molecule.adj_matrix = lewis_info.get('adj_matrix')
+            molecule.bond_orders = lewis_info.get('bond_orders')
+            molecule.formal_charges = lewis_info.get('formal_charges')
+            molecule.lone_pairs = lewis_info.get('lone_pairs')
+            
+            molecule.P_initial = construct_initial_density(molecule, nmol, molsize)
+            
+            # Calculate Cutoff Masks
+            # 1. NDDO Cutoff (for two-electron integrals w)
+            # rij is in Bohr. Cutoffs are in Angstrom.
+            # Convert cutoffs to Bohr.
+            bohr_conv = 1.8897259886
+            if hasattr(molecule, 'const') and hasattr(molecule.const, 'length_conversion_factor'):
+                bohr_conv = molecule.const.length_conversion_factor
+                
+            nddo_cutoff_bohr = self.mozyme_cutoffs[0] * bohr_conv
+            lmo_cutoff_bohr = self.mozyme_cutoffs[1] * bohr_conv
+            
+            # mask_nddo: shape (nPairs,)
+            # rij is (nPairs,)
+            if rij is not None:
+                molecule.mask_nddo = (rij < nddo_cutoff_bohr).float()
+            else:
+                molecule.mask_nddo = None
+                
+            # 2. LMO Cutoff (for Density Matrix P)
+            # P has shape (nmol, molsize*4, molsize*4) usually.
+            # We need a mask of shape (nmol, molsize*4, molsize*4) or (nmol, molsize, molsize) to expand.
+            # Let's build (nmol, molsize, molsize) first.
+            
+            mask_lmo_atoms = torch.zeros((nmol, molsize, molsize), dtype=torch.float32, device=molecule.coordinates.device)
+            
+            # Use rij to populate mask_lmo_atoms
+            # We need to map linear pair indices back to (i, j, k)
+            # pair_molid, idxi, idxj are available.
+            if rij is not None:
+                lmo_pairs = rij < lmo_cutoff_bohr
+                valid_indices = lmo_pairs.nonzero().squeeze()
+                
+                if valid_indices.numel() > 0:
+                    if valid_indices.dim() == 0: valid_indices = valid_indices.unsqueeze(0)
+                    
+                    mols = pair_molid[valid_indices]
+                    # idxi, idxj are global atom indices. Need local.
+                    # We don't have local indices easily here without recomputing?
+                    # Actually, idxi/idxj are global.
+                    # We need local indices for the mask: (mol_idx, local_atom_i, local_atom_j)
+                    
+                    # In basics.py, idxi and idxj are returned.
+                    # They are global indices into the flattened atom list?
+                    # "idxi, idxj : index of atom i and j (0 to natoms-1)"
+                    # Yes.
+                    
+                    # We need to convert global idxi to local.
+                    # We can use atom_molid to find the start of each molecule?
+                    # Or just use modulo if fixed size?
+                    # "molsize" is max size.
+                    # If all molecules are same size (padded), then local = global % molsize.
+                    # Let's assume padding.
+                    
+                    local_i = idxi[valid_indices] % molsize
+                    local_j = idxj[valid_indices] % molsize
+                    
+                    mask_lmo_atoms[mols, local_i, local_j] = 1.0
+                    mask_lmo_atoms[mols, local_j, local_i] = 1.0
+            
+            # Diagonal is always 1
+            mask_lmo_atoms.diagonal(dim1=1, dim2=2).fill_(1.0)
+            
+            # Expand to orbitals (4x4 blocks)
+            # (nmol, molsize, molsize) -> (nmol, molsize, 1, molsize, 1) -> ...
+            # We want (nmol, molsize*4, molsize*4)
+            # Kronecker product with 4x4 ones?
+            # mask_lmo_matrix = torch.kron(mask_lmo_atoms, torch.ones((4,4), device=mask_lmo_atoms.device))
+            # But kron flattens or works on last dims.
+            # Manual expansion:
+            # (nmol, molsize, molsize) -> (nmol, molsize, 4, molsize, 4) -> reshape
+            mask_lmo_matrix = mask_lmo_atoms.unsqueeze(2).unsqueeze(4).repeat(1, 1, 4, 1, 4)
+            molecule.mask_lmo_matrix = mask_lmo_matrix.reshape(nmol, molsize*4, molsize*4)
+            
+        else:
+            molecule.mask_nddo = None
+            molecule.mask_lmo_matrix = None
 
         # nmol, molsize : scalar
         # nHeavy, nHydro, nocc : (nmol,)
@@ -320,6 +422,9 @@ class Hamiltonian(torch.nn.Module):
         w : two electron two center integrals
         v : eigenvectors of F
         """
+        mask_nddo = getattr(molecule, 'mask_nddo', None)
+        mask_lmo_matrix = getattr(molecule, 'mask_lmo_matrix', None)
+        
         F, e, P, Hcore, w, charge, rho0xi,rho0xj, riXH, ri, notconverged, molecular_orbitals = scf_loop(molecule,
                           eps = self.eps,
                           P=P0,
@@ -327,7 +432,9 @@ class Hamiltonian(torch.nn.Module):
                           scf_converger=self.scf_converger,
                           eig=self.eig,
                           scf_backward=self.scf_backward,
-                          scf_backward_eps=self.scf_backward_eps)
+                          scf_backward_eps=self.scf_backward_eps,
+                          mask_nddo=mask_nddo,
+                          mask_lmo_matrix=mask_lmo_matrix)
 
         return F, e, P, Hcore, w, charge,rho0xi,rho0xj, riXH, ri, notconverged, molecular_orbitals
 
