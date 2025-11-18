@@ -72,7 +72,29 @@ def make_Pnew_factory(method, sp2, molsize,
                 # Pack the mask using the same packer
                 mask_packed = packer(mask, *( (nsh,nh,nhy) if method=="PM6" else (nh,nhy) ))
                 
-            D2 = SP2(D, nOcc, sp2[1], mask=mask_packed)
+                # If mask is present, we assume we want to use sparse solver for efficiency
+                # Convert D to sparse CSR
+                # Note: We assume batch size 1 for now for sparse optimization as per SP2 implementation
+                if D.shape[0] == 1:
+                    D_sparse = D[0].to_sparse_csr()
+                    # Also convert mask to sparse if it's not already (it's likely dense 0/1)
+                    # Actually, for sparse SP2, we might not need the mask explicitly if we rely on truncation,
+                    # but passing it helps enforce structure.
+                    # mask_packed is dense here.
+                    # Let's pass D_sparse. SP2 will detect it.
+                    # We can also sparsify the mask to use as a filter.
+                    mask_sparse = mask_packed[0].to_sparse_csr()
+                    
+                    D2_sparse = SP2(D_sparse, nOcc, sp2[1], mask=mask_sparse)
+                    
+                    # Convert back to dense and add batch dim
+                    D2 = D2_sparse.to_dense().unsqueeze(0)
+                else:
+                    # Fallback for batch > 1
+                    D2 = SP2(D, nOcc, sp2[1], mask=mask_packed)
+            else:
+                D2 = SP2(D, nOcc, sp2[1], mask=mask_packed)
+                
             return unpacker(D2, *( (nsh,nh,nhy) if method=="PM6" else (nh,nhy) ))
 
         core_step = _forward
@@ -123,7 +145,7 @@ def get_error(Pold, P, notconverged, matrix_size_sqrt, dm_err, dm_element_err, E
 def scf_forward0(M, w, W, gss, gpp, gsp, gp2, hsp, \
                 nHydro, nHeavy, nSuperHeavy, nOccMO, \
                 nmol, molsize, \
-                maskd, mask, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, sp2=[False], scf_converger=[0, 0.5], unrestricted=False, backward=False, verbose=True, mask_nddo=None, mask_lmo_matrix=None):
+                maskd, mask, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, sp2=[False], scf_converger=[0], unrestricted=False, backward=False, verbose=True, mask_lmo_matrix=None):
     """
     alpha : mixing parameters, alpha=0.0, directly take the new density matrix
     backward is for testing purpose, default is False
@@ -268,7 +290,7 @@ def adaptive_mix(scf_iteration, P_prev, P_cur, Pold2_diag, unrestricted):
 def scf_forward1(M, w, W, gss, gpp, gsp, gp2, hsp, \
                 nHydro, nHeavy, nSuperHeavy, nOccMO, \
                 nmol, molsize, \
-                maskd, mask, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, sp2=[False], scf_converger=[1, 0.0, 0.0, 1], unrestricted=False, backward=False, verbose=True, mask_nddo=None, mask_lmo_matrix=None):
+                maskd, mask, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, sp2=[False], scf_converger=[1], unrestricted=False, backward=False, verbose=True, mask_lmo_matrix=None):
     Pnew = torch.zeros_like(P)
     Pold = torch.zeros_like(P)
     err = torch.ones(nmol, dtype=P.dtype, device=P.device)
@@ -350,7 +372,7 @@ def scf_forward1(M, w, W, gss, gpp, gsp, gp2, hsp, \
             Pold2_diag[notconverged] = diag_prev
 
         # Rebuild Fock with mixed density
-        F = fock(nmol, molsize, P, M, maskd, mask, idxi, idxj, w, W, gss, gpp, gsp, gp2, hsp, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, mask_nddo=mask_nddo)
+        F = fock(nmol, molsize, P, M, maskd, mask, idxi, idxj, w, W, gss, gpp, gsp, gp2, hsp, themethod, zetas, zetap, zetad, Z, F0SD, G2SD)
         Eelec_new[notconverged] = elec_energy(P[notconverged], F[notconverged], Hcore[notconverged])
 
         notconverged, max_dm_err, max_dm_element_err =  get_error(Pold, P, notconverged, matrix_size_sqrt, dm_err, dm_element_err, Eelec_new, err, Eelec, eps, unrestricted=unrestricted)
@@ -382,7 +404,7 @@ def scf_forward1(M, w, W, gss, gpp, gsp, gp2, hsp, \
 def scf_forward2(M, w, W, gss, gpp, gsp, gp2, hsp, \
                 nHydro, nHeavy, nSuperHeavy, nOccMO, \
                 nmol, molsize, \
-                maskd, mask, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, sp2=[False], backward=False, verbose=True, mask_nddo=None, mask_lmo_matrix=None):
+                maskd, mask, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, sp2=[False], backward=False, verbose=True, mask_lmo_matrix=None):
 
     """
     adaptive mixing algorithm, see cnvg.f
@@ -906,7 +928,7 @@ class SCF(torch.autograd.Function):
                 M, w, W, gss, gpp, gsp, gp2, hsp, \
                 nHydro, nHeavy, nSuperHeavy,  nOccMO, \
                 nmol, molsize, \
-                maskd, mask, atom_molid, pair_molid, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD,verbose, mask_nddo=None, mask_lmo_matrix=None):
+                maskd, mask, atom_molid, pair_molid, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD,verbose, mask_lmo_matrix=None):
         
         SCF.scf_backward_eps = eps # set the convergence tolerance for backprop the same as the scf tolerance
         SCF.themethod = themethod
@@ -915,7 +937,7 @@ class SCF(torch.autograd.Function):
             P, notconverged =  scf_forward0(M, w, W, gss, gpp, gsp, gp2, hsp, \
                                nHydro, nHeavy, nSuperHeavy, nOccMO, \
                                nmol, molsize, \
-                               maskd, mask, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, sp2=SCF.sp2, scf_converger=SCF.converger,unrestricted=unrestricted, verbose=verbose, mask_nddo=mask_nddo, mask_lmo_matrix=mask_lmo_matrix )
+                               maskd, mask, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, sp2=SCF.sp2, scf_converger=SCF.converger,unrestricted=unrestricted, verbose=verbose, mask_lmo_matrix=mask_lmo_matrix )
         elif SCF.converger[0] == 3: # KSA
             if unrestricted:
                 raise NotImplementedError("scf_converger = [3] (KSA) not yet implemented for unrestricted calculations. Set UHF = False")
@@ -928,14 +950,14 @@ class SCF(torch.autograd.Function):
                 P, notconverged = scf_forward1(M, w, W, gss, gpp, gsp, gp2, hsp, \
                                             nHydro, nHeavy, nSuperHeavy, nOccMO, \
                                             nmol, molsize, \
-                                            maskd, mask, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, sp2=SCF.sp2, scf_converger=SCF.converger,unrestricted=unrestricted, verbose=verbose, mask_nddo=mask_nddo, mask_lmo_matrix=mask_lmo_matrix)
+                                            maskd, mask, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, sp2=SCF.sp2, scf_converger=SCF.converger,unrestricted=unrestricted, verbose=verbose, mask_lmo_matrix=mask_lmo_matrix)
             elif SCF.converger[0] == 2: # adaptive mixing, then pulay
                 if unrestricted:
                     raise NotImplementedError("scf_converger = [2] (Pulay DIIS) not yet implemented for unrestricted calculations. Set UHF = False")
                 P, notconverged = scf_forward2(M, w, W, gss, gpp, gsp, gp2, hsp, \
                            nHydro, nHeavy, nSuperHeavy, nOccMO, \
                            nmol, molsize, \
-                           maskd, mask, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, sp2=SCF.sp2, verbose=verbose, mask_nddo=mask_nddo, mask_lmo_matrix=mask_lmo_matrix)
+                           maskd, mask, idxi, idxj, P, eps, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, sp2=SCF.sp2, verbose=verbose, mask_lmo_matrix=mask_lmo_matrix)
 
         eps = torch.as_tensor(eps, dtype=M.dtype, device=M.device)
         ctx.save_for_backward(P, M, w, W, gss, gpp, gsp, gp2, hsp, \
@@ -1091,7 +1113,7 @@ class SCF0(SCF):
 
 
 def scf_loop(molecule, \
-            eps = 1.0e-4, P=None, sp2=[False], scf_converger=[1], eig=False, scf_backward=0, scf_backward_eps=1.0e-2, mask_nddo=None, mask_lmo_matrix=None):
+            eps = 1.0e-4, P=None, sp2=[False], scf_converger=[1], eig=False, scf_backward=0, scf_backward_eps=1.0e-2, mask_lmo_matrix=None):
     """
     SCF loop
     # check hcore.py for the details of arguments
@@ -1159,12 +1181,12 @@ def scf_loop(molecule, \
             Pconv, notconverged =  scf_forward0  (M, w, W, molecule.parameters['g_ss'], molecule.parameters['g_pp'], molecule.parameters['g_sp'], molecule.parameters['g_p2'], molecule.parameters['h_sp'], \
                      molecule.nHydro, molecule.nHeavy, molecule.nSuperHeavy, molecule.nocc, \
                      nmol, molecule.molsize, \
-                     molecule.maskd, molecule.mask, molecule.idxi, molecule.idxj, P, eps, molecule.method, molecule.parameters['s_orb_exp_tail'], molecule.parameters['p_orb_exp_tail'], molecule.parameters['d_orb_exp_tail'], molecule.Z, molecule.parameters['F0SD'], molecule.parameters['G2SD'], sp2=sp2, scf_converger=scf_converger, unrestricted=unrestricted, backward=True, verbose=verbose, mask_nddo=mask_nddo, mask_lmo_matrix=mask_lmo_matrix)
+                     molecule.maskd, molecule.mask, molecule.idxi, molecule.idxj, P, eps, molecule.method, molecule.parameters['s_orb_exp_tail'], molecule.parameters['p_orb_exp_tail'], molecule.parameters['d_orb_exp_tail'], molecule.Z, molecule.parameters['F0SD'], molecule.parameters['G2SD'], sp2=sp2, scf_converger=scf_converger, unrestricted=unrestricted, backward=True, verbose=verbose, mask_lmo_matrix=mask_lmo_matrix)
         elif scf_converger[0] == 1:
             Pconv, notconverged =  scf_forward1(  M, w, W, molecule.parameters['g_ss'], molecule.parameters['g_pp'], molecule.parameters['g_sp'], molecule.parameters['g_p2'], molecule.parameters['h_sp'], \
                      molecule.nHydro, molecule.nHeavy, molecule.nSuperHeavy, molecule.nocc, \
                      nmol, molecule.molsize, \
-                     molecule.maskd, molecule.mask, molecule.idxi, molecule.idxj, P, eps, molecule.method, molecule.parameters['s_orb_exp_tail'], molecule.parameters['p_orb_exp_tail'], molecule.parameters['d_orb_exp_tail'], molecule.Z, molecule.parameters['F0SD'], molecule.parameters['G2SD'], sp2=sp2, scf_converger = scf_converger, backward=True, unrestricted = unrestricted, verbose=verbose, mask_nddo=mask_nddo, mask_lmo_matrix=mask_lmo_matrix)
+                     molecule.maskd, molecule.mask, molecule.idxi, molecule.idxj, P, eps, molecule.method, molecule.parameters['s_orb_exp_tail'], molecule.parameters['p_orb_exp_tail'], molecule.parameters['d_orb_exp_tail'], molecule.Z, molecule.parameters['F0SD'], molecule.parameters['G2SD'], sp2=sp2, scf_converger = scf_converger, backward=True, unrestricted = unrestricted, verbose=verbose, mask_lmo_matrix=mask_lmo_matrix)
         elif scf_converger[0] == 2:
             if unrestricted:
                 raise NotImplementedError("scf_converger = [2] (Pulay DIIS) not yet implemented for unrestricted calculations. Set UHF = False")
@@ -1172,7 +1194,7 @@ def scf_loop(molecule, \
                 Pconv, notconverged =  scf_forward2(  M, w, W, molecule.parameters['g_ss'], molecule.parameters['g_pp'], molecule.parameters['g_sp'], molecule.parameters['g_p2'], molecule.parameters['h_sp'], \
                          molecule.nHydro, molecule.nHeavy, molecule.nSuperHeavy, molecule.nocc, \
                          nmol, molecule.molsize, \
-                         molecule.maskd, molecule.mask, molecule.idxi, molecule.idxj, P, eps, molecule.method, molecule.parameters['s_orb_exp_tail'], molecule.parameters['p_orb_exp_tail'], molecule.parameters['d_orb_exp_tail'], molecule.Z, molecule.parameters['F0SD'], molecule.parameters['G2SD'], sp2=sp2,backward=True, verbose=verbose, mask_nddo=mask_nddo, mask_lmo_matrix=mask_lmo_matrix)
+                         molecule.maskd, molecule.mask, molecule.idxi, molecule.idxj, P, eps, molecule.method, molecule.parameters['s_orb_exp_tail'], molecule.parameters['p_orb_exp_tail'], molecule.parameters['d_orb_exp_tail'], molecule.Z, molecule.parameters['F0SD'], molecule.parameters['G2SD'], sp2=sp2,backward=True, verbose=verbose, mask_lmo_matrix=mask_lmo_matrix)
         else:
             raise ValueError("""For direct backpropagation through scf,
                                 must set scf_converger=[0, alpha] or [1,...] or [2]\n""")
@@ -1189,7 +1211,7 @@ def scf_loop(molecule, \
             Pconv, notconverged = scfapply(M, w, W, molecule.parameters['g_ss'], molecule.parameters['g_pp'], molecule.parameters['g_sp'], molecule.parameters['g_p2'], molecule.parameters['h_sp'], \
                 molecule.nHydro, molecule.nHeavy, molecule.nSuperHeavy, molecule.nocc, \
                 nmol, molecule.molsize, \
-                molecule.maskd, molecule.mask, molecule.atom_molid, molecule.pair_molid, molecule.idxi, molecule.idxj, P, eps, molecule.method, molecule.parameters['s_orb_exp_tail'], molecule.parameters['p_orb_exp_tail'], molecule.parameters['d_orb_exp_tail'], molecule.Z, molecule.parameters['F0SD'], molecule.parameters['G2SD'], verbose, mask_nddo, mask_lmo_matrix )
+                molecule.maskd, molecule.mask, molecule.atom_molid, molecule.pair_molid, molecule.idxi, molecule.idxj, P, eps, molecule.method, molecule.parameters['s_orb_exp_tail'], molecule.parameters['p_orb_exp_tail'], molecule.parameters['d_orb_exp_tail'], molecule.Z, molecule.parameters['F0SD'], molecule.parameters['G2SD'], verbose, mask_lmo_matrix )
 
     if notconverged.any():
         nnot = notconverged.type(torch.int).sum().data.item()
@@ -1206,7 +1228,7 @@ def scf_loop(molecule, \
     
     fock = fock_u_batch if unrestricted else fock_restricted
     F = fock(nmol, molecule.molsize, Pconv, M, molecule.maskd, molecule.mask, molecule.idxi, molecule.idxj, w, W,\
-                         molecule.parameters['g_ss'], molecule.parameters['g_pp'], molecule.parameters['g_sp'], molecule.parameters['g_p2'], molecule.parameters['h_sp'], molecule.method, molecule.parameters['s_orb_exp_tail'], molecule.parameters['p_orb_exp_tail'], molecule.parameters['d_orb_exp_tail'], molecule.Z, molecule.parameters['F0SD'], molecule.parameters['G2SD'], mask_nddo=mask_nddo)
+                         molecule.parameters['g_ss'], molecule.parameters['g_pp'], molecule.parameters['g_sp'], molecule.parameters['g_p2'], molecule.parameters['h_sp'], molecule.method, molecule.parameters['s_orb_exp_tail'], molecule.parameters['p_orb_exp_tail'], molecule.parameters['d_orb_exp_tail'], molecule.Z, molecule.parameters['F0SD'], molecule.parameters['G2SD'])
         
     Hcore = M.reshape(nmol,molecule.molsize,molecule.molsize,num_orbitals,num_orbitals) \
              .transpose(2,3) \

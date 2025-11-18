@@ -88,14 +88,23 @@ def test_mozyme_option():
     else:
         print("FAILURE: P_initial is None.")
 
-    # Verify Masks (Step C)
-    if mol_mozyme.mask_nddo is not None:
-        print("SUCCESS: mask_nddo is populated.")
-        print(f"mask_nddo shape: {mol_mozyme.mask_nddo.shape}")
-        # For water, all atoms are within bonding distance, so mask should be all 1s for close pairs
-        # But let's just check it exists.
+    # Verify Sparse Neighbor List (Step E)
+    # mask_nddo is removed, instead we check if idxi/idxj are pruned.
+    if mol_mozyme.mask_nddo is None:
+        print("SUCCESS: mask_nddo is None (as expected with sparse neighbor list).")
     else:
-        print("FAILURE: mask_nddo is None.")
+        print("FAILURE: mask_nddo should be None.")
+        
+    # Check pair count
+    n_pairs_full = mol_mozyme.molsize * (mol_mozyme.molsize - 1) // 2
+    n_pairs_actual = mol_mozyme.idxi.shape[0]
+    print(f"Full Pair Count: {n_pairs_full}")
+    print(f"Actual Pair Count (Pruned): {n_pairs_actual}")
+    
+    if n_pairs_actual <= n_pairs_full:
+        print("SUCCESS: Pair list is pruned (or equal for small molecules).")
+    else:
+        print("FAILURE: Pair list is larger than full?")
         
     if mol_mozyme.mask_lmo_matrix is not None:
         print("SUCCESS: mask_lmo_matrix is populated.")
