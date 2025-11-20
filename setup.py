@@ -58,7 +58,7 @@ setup(
     # your project is installed. For an analysis of "install_requires" vs pip's
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
-    install_requires=['numpy', 'torch>=1.9'],
+    install_requires=['numpy', 'torch>=1.9', 'rdkit', 'h5py', 'psutil'],
     # for doing geometry optimization with geomeTRIC optimizer (best optimizer for molecular geometries)
     extras_require={ "geomopt": [ "geometric",], },
     include_package_data=True,
