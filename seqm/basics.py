@@ -455,7 +455,6 @@ class Hamiltonian(torch.nn.Module):
         w : two electron two center integrals
         v : eigenvectors of F
         """
-        mask_nddo = getattr(molecule, 'mask_nddo', None)
         mask_lmo_matrix = getattr(molecule, 'mask_lmo_matrix', None)
         
         F, e, P, Hcore, w, charge, rho0xi,rho0xj, riXH, ri, notconverged, molecular_orbitals = scf_loop(molecule,
@@ -466,7 +465,6 @@ class Hamiltonian(torch.nn.Module):
                           eig=self.eig,
                           scf_backward=self.scf_backward,
                           scf_backward_eps=self.scf_backward_eps,
-                          mask_nddo=mask_nddo,
                           mask_lmo_matrix=mask_lmo_matrix)
 
         return F, e, P, Hcore, w, charge,rho0xi,rho0xj, riXH, ri, notconverged, molecular_orbitals
@@ -486,7 +484,8 @@ class Energy(torch.nn.Module):
         self.uhf = seqm_parameters.get('UHF', False)
         self.eig = seqm_parameters.get('eig', True)
         self.excited_states = seqm_parameters.get('excited_states')
-        self.excited_states["make_best_guess"] = True
+        if self.excited_states is not None:
+            self.excited_states["make_best_guess"] = True
         if self.uhf and self.excited_states is not None:
             raise NotImplementedError("Unrestricted excited state methods (CIS and RPA) not available")
 

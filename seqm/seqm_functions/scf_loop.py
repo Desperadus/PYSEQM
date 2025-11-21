@@ -165,7 +165,7 @@ def scf_forward0(M, w, W, gss, gpp, gsp, gp2, hsp, \
     dm_element_err = torch.ones(nmol, dtype=P.dtype, device=P.device)
     notconverged = torch.ones(nmol,dtype=torch.bool, device=M.device)
     fock = fock_u_batch if unrestricted else fock_restricted
-    F = fock(nmol, molsize, P, M, maskd, mask, idxi, idxj, w, W, gss, gpp, gsp, gp2, hsp,themethod, zetas, zetap, zetad, Z, F0SD, G2SD, mask_nddo=mask_nddo)
+    F = fock(nmol, molsize, P, M, maskd, mask, idxi, idxj, w, W, gss, gpp, gsp, gp2, hsp,themethod, zetas, zetap, zetad, Z, F0SD, G2SD)
     num_orbitals = 9 if themethod == 'PM6' else 4
     Hcore = M.reshape(nmol,molsize,molsize,num_orbitals,num_orbitals) \
              .transpose(2,3) \
@@ -299,7 +299,7 @@ def scf_forward1(M, w, W, gss, gpp, gsp, gp2, hsp, \
     notconverged = torch.ones(nmol, dtype=torch.bool, device=M.device)
 
     fock = fock_u_batch if unrestricted else fock_restricted
-    F = fock(nmol, molsize, P, M, maskd, mask, idxi, idxj, w, W, gss, gpp, gsp, gp2, hsp, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, mask_nddo=mask_nddo)
+    F = fock(nmol, molsize, P, M, maskd, mask, idxi, idxj, w, W, gss, gpp, gsp, gp2, hsp, themethod, zetas, zetap, zetad, Z, F0SD, G2SD)
 
     num_orbitals = 9 if themethod == 'PM6' else 4
     Hcore = M.reshape(nmol, molsize, molsize, num_orbitals, num_orbitals) \
@@ -427,7 +427,7 @@ def scf_forward2(M, w, W, gss, gpp, gsp, gp2, hsp, \
     notconverged = torch.ones(nmol,dtype=torch.bool, device=M.device)
     k = 0
     fock = fock_restricted
-    F = fock(nmol, molsize, P, M, maskd, mask, idxi, idxj, w, W, gss, gpp, gsp, gp2, hsp, themethod, zetas, zetap, zetad, Z, F0SD, G2SD, mask_nddo=mask_nddo)
+    F = fock(nmol, molsize, P, M, maskd, mask, idxi, idxj, w, W, gss, gpp, gsp, gp2, hsp, themethod, zetas, zetap, zetad, Z, F0SD, G2SD)
     err = torch.ones(nmol, dtype=P.dtype, device=P.device)
     Pnew = torch.zeros_like(P)
     Pold = torch.zeros_like(P)

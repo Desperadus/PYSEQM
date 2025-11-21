@@ -120,11 +120,12 @@ def fock(nmol, molsize, P0, M, maskd, mask, idxi, idxj,
     F = _one_center(F, P, maskd, gss, gpp, gsp, gp2, hsp)
 
     # 4) PM6 one-center ERI contributions from d-orbitals
-    if themethod == 'PM6':
+    if method == 'PM6':
         F = _d_contrib_one_center(F, P, W, maskd)
 
     # 5) two-center (coulomb J & exchange K) neighbor-atom terms
-    F = _two_center(F, P, w, maskd, mask,idxi, idxj, themethod, mask_nddo)
+    # Note: mask_nddo is not needed as idxi/idxj are already pruned if using MOZYME
+    F = _two_center(F, P, w, maskd, mask, idxi, idxj, method)
 
     # 6) reassemble full Fock matrix 
     nrs = nbf * molsize
@@ -205,14 +206,14 @@ def _d_contrib_one_center(F, P, W, maskd):
 
 # ——— Helper: two-center (J & K) —————————————————————————————————————
 
-def _two_center(nmol, molsize, P, maskd, mask, idxi, idxj, w, W, gss, gpp, gsp, gp2, hsp, method, zetas, zetap, zetad, Z, F0SD, G2SD):
+def _two_center(F, P, w, maskd, mask, idxi, idxj, method):
     """
     Adds two-center (neighbor-atom) J and K contributions.
     """
     # No need to apply mask_nddo as idxi/idxj are already pruned
     # Two-electron two-center weight factors
 
-    if method == 'MNDO':
+    if method == 'PM6':
         nbf       = PM6_NBF
         tril_idx  = TRIL_IDX_9
         weight_tc = WEIGHT_45.to(device=P.device,dtype=P.dtype)
@@ -224,7 +225,7 @@ def _two_center(nmol, molsize, P, maskd, mask, idxi, idxj, w, W, gss, gpp, gsp, 
     i0,i1 = tril_idx
 
     # Pack intra-atomic blocks for neighbors A and B by multiplying the lower triangle blocks by 2
-    idxA, idxB = (idxj, idxi) if themethod=="PM6" else (idxi,idxj) 
+    idxA, idxB = (idxj, idxi) if method=="PM6" else (idxi,idxj) 
     PA = (P[maskd[idxA]][:, i1, i0] * weight_tc).unsqueeze(-1)  # (...,nP,1)
     PB = (P[maskd[idxB]][:, i1, i0] * weight_tc).unsqueeze(-2)  # (...,1,nP)
         
@@ -253,7 +254,7 @@ def _two_center(nmol, molsize, P, maskd, mask, idxi, idxj, w, W, gss, gpp, gsp, 
     # The commented-out code below is lower-memory version but has two python nested for-loops
 
     # # Contract Pp[b,ν,σ] with w[b, ind[j,i,νσ] ] over ν,σ
-    # if themethod=='PM6':
+    # if method=='PM6':
     #     Pp = Pp.transpose(1,2)
     #     # ind is mapping from (i,j) → integral indices in w
     #     ind = K_ind_9.to(device=P.device)
@@ -272,12 +273,12 @@ def _two_center(nmol, molsize, P, maskd, mask, idxi, idxj, w, W, gss, gpp, gsp, 
     #             Ksum[..., i, j] = (Pp * wblk).sum(dim=(1,2))
 
     # This eliminates one of the for-loops but uses more memory
-    ind       = (K_ind_9 if themethod=='PM6' else K_ind_4).to(P.device)
+    ind       = (K_ind_9 if method=='PM6' else K_ind_4).to(P.device)
 
     p_idx = ind.view(-1)               # (i*ν,)
     w1 = w[:, p_idx, :].view(B, nbf, nbf, -1)  # last dim = nP, which is the packed index that packs nbf*nbf
 
-    if themethod=="PM6":
+    if method=="PM6":
         # With d-orbitals, the w tensor seems to align with the 
         # upper triangle blocks of P, but Pp=P[mask] gets the
         # blocks of the lower triangle of P. So we transpose it here
