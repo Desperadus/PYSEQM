@@ -218,7 +218,12 @@ def construct_initial_density(molecule, nmol, molsize):
     # Assuming standard padding of 4 orbitals per atom (s, px, py, pz)
     # Even for H, we allocate a block, though only s is used.
     
-    max_orb = molsize * 4
+    # Determine number of orbitals per atom based on method
+    nbf = 4
+    if hasattr(molecule, 'method') and molecule.method == 'PM6':
+        nbf = 9
+    
+    max_orb = molsize * nbf
     P0 = torch.zeros((nmol, max_orb, max_orb), dtype=molecule.coordinates.dtype, device=molecule.coordinates.device)
     
     # We need to iterate through molecules and atoms.
@@ -270,7 +275,7 @@ def construct_initial_density(molecule, nmol, molsize):
         
         # Helper to get orbital indices for atom j
         def get_orb_indices(atom_idx):
-            start = atom_idx * 4
+            start = atom_idx * nbf
             return [start, start+1, start+2, start+3] # s, px, py, pz
             
         # Helper to get hybrid orbital coefficients (s, px, py, pz)

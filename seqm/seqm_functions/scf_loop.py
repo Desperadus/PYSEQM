@@ -56,6 +56,7 @@ def make_Pnew_factory(method, sp2, molsize,
         raise ValueError("SP2 + open‐shell is not yet supported")
     # 1) pick the “core” step function
     if sp2[0]:
+        if debug: print("Using SP2 algorithm")
         # SP2-based
         if method == "PM6":
             packer   = lambda F, nsh, nh, nhy: packd(F, nsh, nh, nhy)
@@ -1176,7 +1177,7 @@ def scf_loop(molecule, \
     if scf_backward == 2:
         if sp2[0]:
             warnings.warn('SP2 is not used for direct backpropagation through scf loop')
-            sp2[0] = False
+            sp2 = [False]
         if scf_converger[0] == 0:
             Pconv, notconverged =  scf_forward0  (M, w, W, molecule.parameters['g_ss'], molecule.parameters['g_pp'], molecule.parameters['g_sp'], molecule.parameters['g_p2'], molecule.parameters['h_sp'], \
                      molecule.nHydro, molecule.nHeavy, molecule.nSuperHeavy, molecule.nocc, \

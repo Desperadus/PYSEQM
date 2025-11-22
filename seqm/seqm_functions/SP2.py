@@ -1,3 +1,4 @@
+import torch
 from .sparse_utils import sparse_eye, sparse_diagonal, truncate_sparse
 
 def SP2(a, nocc, eps=1.0e-4, factor=2.0, mask=None):
@@ -27,7 +28,13 @@ def SP2(a, nocc, eps=1.0e-4, factor=2.0, mask=None):
             eps=1.0e-7
     noccd = nocc.type(dtype)
 
-    N, D, _ = a.shape
+    if a.dim() == 3:
+        N, D, _ = a.shape
+    elif a.dim() == 2:
+        N = 1
+        D, _ = a.shape
+    else:
+        raise ValueError(f"SP2 expects 2D or 3D tensor, got {a.dim()}D")
     
     if is_sparse:
         # Sparse Implementation
@@ -39,31 +46,41 @@ def SP2(a, nocc, eps=1.0e-4, factor=2.0, mask=None):
         # Assuming N=1 or treating batch as block diagonal is complex. 
         # Let's assume N=1 for the sparse path as typical for large molecules.
         
+        # Convert to COO for internal operations as CSR has limited support for arithmetic/sum on CPU
+        original_layout = a.layout
+        if original_layout == torch.sparse_csr:
+            a = a.to_sparse_coo()
+            if mask is not None and mask.layout == torch.sparse_csr:
+                mask = mask.to_sparse_coo()
+        
         aii = sparse_diagonal(a) # Returns dense vector of diagonal
-        # row sum of abs values. 
-        # For CSR: sum over values in each row.
-        if a.layout == torch.sparse_csr:
-            # simple approximation: convert to dense for row sum if memory allows, or iterate.
-            # For efficiency, let's use a rough estimate or convert to COO.
-            # Actually, torch.sparse.sum(dim=1) might work.
-            ri = torch.sparse.sum(torch.abs(a), dim=2).to_dense() - torch.abs(aii)
+        
+        # Determine dimensions for sum and min/max
+        if N == 1 and a.dim() == 2:
+            sum_dim = 1
+            minmax_dim = 0
         else:
-            # COO
-            ri = torch.sparse.sum(torch.abs(a), dim=2).to_dense() - torch.abs(aii)
+            sum_dim = 2
+            minmax_dim = 1
+
+        # row sum of abs values. 
+        # COO sum is supported
+        ri = torch.sparse.sum(torch.abs(a), dim=sum_dim).to_dense() - torch.abs(aii)
             
-        h1 = torch.min(aii-ri,dim=1)[0]
-        hN = torch.max(aii+ri,dim=1)[0]
+        h1 = torch.min(aii-ri,dim=minmax_dim)[0]
+        hN = torch.max(aii+ri,dim=minmax_dim)[0]
         
         # scale a
         # a0 = (hN*I - a) / (hN - h1)
-        # Sparse identity
-        I = sparse_eye(D, device=device, dtype=dtype, layout=a.layout)
+        # Sparse identity in COO
+        I = sparse_eye(D, device=device, dtype=dtype, layout=torch.sparse_coo)
+        
         # Expand scalars for broadcasting
         hN_view = hN.reshape(-1, 1, 1) # (N, 1, 1)
         diff_view = (hN - h1).reshape(-1, 1, 1)
         
         # Note: Sparse tensor * scalar is supported.
-        # Sparse + Sparse is supported.
+        # Sparse + Sparse is supported for COO.
         # We need to be careful with batch dimension broadcasting which is often not supported in sparse.
         # If N=1:
         if N == 1:
@@ -105,7 +122,7 @@ def SP2(a, nocc, eps=1.0e-4, factor=2.0, mask=None):
                 # If mask is dense (boolean), this makes it dense?
                 # If mask is sparse, it's intersection.
                 # Ideally mask is a sparse tensor of 1s.
-                if mask.is_sparse or mask.is_sparse_csr:
+                if mask.is_sparse:
                      a2 = a2 * mask # Intersection
                 else:
                      # If mask is dense, we probably don't want to densify.
@@ -139,6 +156,10 @@ def SP2(a, nocc, eps=1.0e-4, factor=2.0, mask=None):
                 notconverged = not ((errm0 < eps) and (errm1 < eps))
                 
             if k > 100: break # Safety break
+            
+        # Convert back to original layout if needed
+        if original_layout == torch.sparse_csr:
+            a0 = a0.to_sparse_csr()
             
         return factor * a0
 
@@ -178,6 +199,9 @@ def SP2(a, nocc, eps=1.0e-4, factor=2.0, mask=None):
             errm1[notconverged] = errm0[notconverged]
             errm0[notconverged] = torch.abs(torch.sum(a0[notconverged].diagonal(dim1=1,dim2=2),dim=1)-noccd[notconverged])
             k+=1
+            if k > 100:
+                print("SP2 dense loop reached max iter 100")
+                break
             #"""
             #print('SP2', k,' '.join([str(x) for x in errm0.tolist()]))
             #print(' '.join([str(x) for x in torch.symeig(a0)[0][0].tolist()]))

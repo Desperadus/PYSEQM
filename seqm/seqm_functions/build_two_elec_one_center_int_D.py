@@ -130,7 +130,8 @@ def calc_integral(zetas, zetap, zetad, Z, size, maskd, P0, F0SD, G2SD):
 
         
         
-        W = torch.zeros(size,243, device = device)
+        W = torch.zeros(size,243, device = device, dtype=P0.dtype)
+        integral = integral.to(dtype=P0.dtype)
         IntRf1 = [ \
         19,19,19,19,19, 3, 3, 8, 3, 3,33,33, 8,27,25,35,33,15, 8, 3, \
          3,34, 3,27,15,33,35, 8,28,25,33,33, 3, 2, 3, 3,34,24,35, 3, \

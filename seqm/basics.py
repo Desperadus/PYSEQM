@@ -195,17 +195,22 @@ class Parser(torch.nn.Module):
                 idxj_all = inv_real_atoms[pair_second[all_nonblank_pairs_mask]]
 
                 # Now use these idxi_all, idxj_all to get distances for all non-blank pairs
-                Ri_all = R[:, idxi_all] # (nmol, n_all_pairs, 3)
-                Rj_all = R[:, idxj_all]
+                # Now use these idxi_all, idxj_all to get distances for all non-blank pairs
+                # R is (nmol, molsize, 3). We need to flatten it to index with idxi_all (which are indices into real_atoms)
+                R_flat = R.reshape(-1, 3)
+                R_real = R_flat[real_atoms] # (n_real_atoms, 3)
+                
+                Ri_all = R_real[idxi_all] # (n_all_pairs, 3)
+                Rj_all = R_real[idxj_all]
                 Rij_all = Ri_all - Rj_all
-                d2_all = (Rij_all**2).sum(dim=-1) # (nmol, n_all_pairs)
+                d2_all = (Rij_all**2).sum(dim=-1) # (n_all_pairs,)
                 dist_all = d2_all.sqrt()
                 
                 # Check cutoff for NDDO
                 cutoff_bohr = self.mozyme_cutoffs[0] / molecule.const.length_conversion_factor
                 
-                # Mask for pairs within cutoff in AT LEAST ONE molecule in the batch
-                keep_mask_nddo = (dist_all < cutoff_bohr).any(dim=0) # (n_all_pairs,)
+                # Mask for pairs within cutoff
+                keep_mask_nddo = (dist_all < cutoff_bohr) # (n_all_pairs,)
                 
                 # Filter idxi, idxj, and other pair-related tensors
                 idxi = idxi_all[keep_mask_nddo]
@@ -241,34 +246,30 @@ class Parser(torch.nn.Module):
                 # LMO Mask (for Density Matrix)
                 lmo_cutoff_bohr = self.mozyme_cutoffs[1] / molecule.const.length_conversion_factor
                 
-                # Recalculate distances for the pruned list, per molecule
-                # dist_all was (nmol, n_all_pairs)
-                dist_pruned_per_mol = dist_all[:, keep_mask_nddo] # (nmol, n_pruned_pairs)
+                # Recalculate distances for the pruned list
+                # dist_all was (n_all_pairs,)
+                dist_pruned = dist_all[keep_mask_nddo] # (n_pruned_pairs,)
                 
-                lmo_mask_pairs = (dist_pruned_per_mol < lmo_cutoff_bohr).float() # (nmol, n_pruned_pairs)
+                lmo_mask_pairs = (dist_pruned < lmo_cutoff_bohr).float() # (n_pruned_pairs,)
                 
                 # Create a mask at atom level first: (nmol, molsize, molsize)
                 # Initialize with zeros, then fill in based on pruned pairs
                 mask_atom = torch.zeros((nmol, molsize, molsize), device=device, dtype=torch.float32)
                 
                 # Fill the mask_atom for the pruned pairs
-                # This needs to be done per molecule, as lmo_mask_pairs is (nmol, n_pruned_pairs)
-                for k in range(nmol):
-                    # Map idxi, idxj (which are global atom indices within the real_atoms list)
-                    # back to molsize-local indices if needed, or use them directly if mask_atom is global.
-                    # mask_atom is (nmol, molsize, molsize), so idxi, idxj should be atom indices within molsize.
-                    # No, idxi, idxj are indices into Z, which is (n_real_atoms,).
-                    # We need to map them to the original molsize indices.
-                    # The `real_atoms` array maps `idxi` (index into Z) to `atom_index` (index into nmol*molsize).
-                    # Then `atom_index % molsize` gives the local index within the molecule.
-
-                    local_idxi = real_atoms[idxi] % molsize
-                    local_idxj = real_atoms[idxj] % molsize
-
-                    mask_atom[k, local_idxi, local_idxj] = lmo_mask_pairs[k]
-                    mask_atom[k, local_idxj, local_idxi] = lmo_mask_pairs[k] # Symmetric
+                local_idxi = real_atoms[idxi] % molsize
+                local_idxj = real_atoms[idxj] % molsize
+                
+                # pair_molid is already calculated: pair_molid = atom_molid[idxi]
+                
+                mask_atom[pair_molid, local_idxi, local_idxj] = lmo_mask_pairs
+                mask_atom[pair_molid, local_idxj, local_idxi] = lmo_mask_pairs # Symmetric
+                
+                # Ensure diagonal is 1 (keep on-atom blocks)
+                mask_atom.diagonal(dim1=1, dim2=2).fill_(1.0)
                     
-                mask_lmo_matrix = torch.kron(mask_atom, torch.ones(4, 4, device=device))
+                nbf = 9 if themethod == 'PM6' else 4
+                mask_lmo_matrix = torch.kron(mask_atom, torch.ones(nbf, nbf, device=device))
                 molecule.mask_lmo_matrix = mask_lmo_matrix
                 
                 # Remove mask_nddo (no longer needed as we pruned the pairs)

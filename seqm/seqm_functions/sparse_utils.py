@@ -7,7 +7,10 @@ def sparse_eye(size, device=None, dtype=None, layout=torch.sparse_coo):
     indices = torch.arange(size, device=device)
     indices = torch.stack((indices, indices), dim=0)
     values = torch.ones(size, device=device, dtype=dtype)
-    return torch.sparse_coo_tensor(indices, values, (size, size), device=device, dtype=dtype).to(layout)
+    res = torch.sparse_coo_tensor(indices, values, (size, size), device=device, dtype=dtype)
+    if layout == torch.sparse_csr:
+        return res.to_sparse_csr()
+    return res
 
 def sparse_diagonal(sparse_tensor):
     """
